@@ -5,6 +5,7 @@ import streamlit as st
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import IsolationForest
+import uuid
 
 st.set_page_config(page_title="Smart Expense Tracker", layout="wide")
 
@@ -37,6 +38,14 @@ if not DATA_PATH.exists():
     st.stop()
 
 df = pd.read_csv(DATA_PATH)
+if "ID" not in df.columns:
+    df["ID"] = [str(uuid.uuid4())[:8] for _ in range(len(df))]
+    df.to_csv(DATA_PATH, index=False)
+
+df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+df = df.dropna(subset=["Date"])
+
+
 df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 df = df.dropna(subset=["Date"])
 
@@ -47,12 +56,24 @@ if "open_add_modal" not in st.session_state:
 
 def save_expense(date_value, category_value, amount_value):
     new_row = pd.DataFrame([{
+        "ID": str(uuid.uuid4())[:8],
         "Date": date_value.strftime("%Y-%m-%d"),
         "Category": category_value,
         "Amount": int(amount_value),
     }])
 
-    new_row.to_csv(DATA_PATH, mode="a", header=False, index=False)
+
+def delete_expense(expense_id):
+    df_all = pd.read_csv(DATA_PATH)
+
+    # make sure both are string
+    df_all["ID"] = df_all["ID"].astype(str)
+    expense_id = str(expense_id)
+
+    # keep only rows that are NOT the selected ID
+    df_all = df_all[df_all["ID"] != expense_id]
+
+    df_all.to_csv(DATA_PATH, index=False)
 
 
 if add_clicked:
@@ -75,6 +96,7 @@ if st.session_state.open_add_modal:
         with col1:
             if st.button("Save"):
                 save_expense(new_date, new_category, new_amount)
+                st.cache_data.clear()
                 st.success("✅ Expense added!")
                 st.session_state.open_add_modal = False
                 st.rerun()
@@ -131,8 +153,11 @@ else:
 categories = ["All"] + sorted(df["Category"].unique().tolist())
 selected_category = st.sidebar.selectbox("Category", categories)
 
-filtered_df = df[(df["Date"].dt.date >= start_date)
-                 & (df["Date"].dt.date <= end_date)]
+df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+start_date = pd.to_datetime(start_date)
+end_date = pd.to_datetime(end_date)
+
+filtered_df = df[(df["Date"] >= start_date) & (df["Date"] <= end_date)].copy()
 
 if selected_category != "All":
     filtered_df = filtered_df[filtered_df["Category"] == selected_category]
@@ -192,6 +217,20 @@ else:
 # ----------------------------
 st.subheader("Data Preview")
 st.dataframe(filtered_df.head(25), use_container_width=True)
+st.subheader("🗑 Delete an Expense")
+
+if len(filtered_df) > 0:
+    delete_id = st.selectbox(
+        "Select Expense ID to delete",
+        filtered_df.head(25)["ID"].tolist()
+    )
+
+    if st.button("Delete Selected Expense"):
+        delete_expense(delete_id)
+        st.success(f"Deleted expense ID: {delete_id}")
+        st.rerun()
+else:
+    st.info("No expenses available to delete.")
 
 st.divider()
 
@@ -243,17 +282,12 @@ if len(monthly) >= 2:
     model = LinearRegression()
     model.fit(X, y)
 
-    next_index = [[len(monthly)]]
-    prediction = model.predict(next_index)[0]
+    next_month_df = pd.DataFrame({"MonthIndex": [int(len(monthly))]})
+    prediction = model.predict(next_month_df)[0]
 
     st.success(f"Predicted next month expense: ₹ {prediction:,.0f}")
-
     st.write("📌 Monthly totals used for prediction:")
-    st.dataframe(monthly, use_container_width=True)
-
-    st.write("📈 Monthly Expense Trend:")
     st.line_chart(monthly.set_index("Month")["Amount"])
-
 else:
     st.warning(
         "Not enough monthly data. Add at least 2 months of expenses for prediction.")
@@ -263,13 +297,14 @@ st.subheader("Overspending / Anomaly Detection")
 
 if len(filtered_df) >= 10:
     iso = IsolationForest(contamination=0.05, random_state=42)
-    filtered_df["Anomaly"] = iso.fit_predict(filtered_df[["Amount"]])
+    filtered_df.loc[:, "Anomaly"] = iso.fit_predict(filtered_df[["Amount"]])
 
     anomalies = filtered_df[filtered_df["Anomaly"]
                             == -1].sort_values("Amount", ascending=False)
 
     if not anomalies.empty:
         st.error("⚠️ Unusual high expenses detected!")
+
         st.dataframe(anomalies[["Date", "Category", "Amount"]].head(
             15), use_container_width=True)
     else:
