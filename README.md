@@ -36,4 +36,3 @@ A Streamlit-based expense tracker that allows users to record expenses, filter b
 ---
 
 ## 📂 Project Structure
-
